@@ -1,0 +1,23 @@
+---
+- name: Apply all available security updates
+  ansible.builtin.dnf:
+    name: "*"
+    state: latest
+    security: true
+
+- name: Install dnf-automatic
+  ansible.builtin.dnf:
+    name: dnf-automatic
+    state: present
+
+- name: Configure dnf-automatic to apply updates
+  ansible.builtin.lineinfile:
+    path: /etc/dnf/automatic.conf
+    regexp: '^apply_updates ='
+    line: 'apply_updates = yes'
+
+- name: Enable and start dnf-automatic timer
+  ansible.builtin.systemd:
+    name: dnf-automatic.timer
+    enabled: true
+    state: started

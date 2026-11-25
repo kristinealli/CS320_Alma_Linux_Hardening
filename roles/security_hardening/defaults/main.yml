@@ -1,6 +1,8 @@
 ---
-hardening_ssh_user: ansible_admin
-hardening_mgmt_network: 192.168.1.0/24
-hardening_required_ports: []
+hardening_ssh_user: kjohnson
+hardening_mgmt_network: 10.2.37.0/24
+hardening_required_ports: 
+  - 22/tcp
+  - 9090/tcp
 hardening_is_web_server: false
 hardening_firewall_zone: public
