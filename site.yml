@@ -1,0 +1,6 @@
+---
+- name: Apply AlmaLinux security baseline
+  hosts: linux_servers
+  become: true
+  roles:
+    - security_hardening

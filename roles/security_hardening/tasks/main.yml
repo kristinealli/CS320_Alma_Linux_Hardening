@@ -1,0 +1,12 @@
+---
+- import_tasks: updates.yml
+- import_tasks: accounts.yml
+- import_tasks: firewall.yml
+- import_tasks: permissions.yml
+- import_tasks: ssh.yml
+- import_tasks: sysctl.yml
+- import_tasks: selinux.yml
+- import_tasks: auditd.yml
+- import_tasks: logging.yml
+- import_tasks: banner.yml
+- import_tasks: validate.yml
