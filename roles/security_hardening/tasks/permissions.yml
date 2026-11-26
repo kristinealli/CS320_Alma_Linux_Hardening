@@ -1,0 +1,6 @@
+---
+- name: Set ownership and mode on core account files
+- name: Secure the admin user's .ssh directory
+- name: Secure the admin user's authorized_keys file
+- name: Read the passwd database
+- name: Restrict non-system home directories

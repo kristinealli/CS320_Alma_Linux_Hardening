@@ -1,0 +1,62 @@
+---
+- name: Install firewalld
+  ansible.builtin.dnf:
+    name: firewalld
+    state: present
+
+- name: Enable and start firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+    enabled: true
+    state: started
+
+- name: Place the interface in the intended zone
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    interface: "{{ hardening_firewall_interface }}"
+    permanent: true
+    immediate: true
+    state: enabled
+
+- name: Allow SSH only from the management network
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    rich_rule: "rule family='ipv4' source address='{{ hardening_mgmt_network }}' service name='ssh' accept"
+    permanent: true
+    immediate: true
+    state: enabled
+
+- name: Remove the general SSH service from the zone
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    service: ssh
+    permanent: true
+    immediate: true
+    state: disabled
+
+- name: Remove unneeded services
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    service: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: disabled
+  loop: "{{ hardening_remove_services }}"
+
+- name: Open required application ports
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ hardening_required_ports }}"
+
+- name: Allow HTTP and HTTPS only on web servers
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    service: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: "{{ 'enabled' if hardening_is_web_server else 'disabled' }}"
+  loop: [http, https]
