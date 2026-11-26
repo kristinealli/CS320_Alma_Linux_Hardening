@@ -11,11 +11,11 @@
     - { key: "lcredit", value: "-1" }
     - { key: "ocredit", value: "-1" }
 
-  - name: Set password aging defaults for new accounts
-    ansible.builtin.lineinfile:
-      path: /etc/login.defs
-      regexp: '^#?\s*{{ item.key }}\s*'
-      line: '{{ item.key }} = {{ item.value }}'
+- name: Set password aging defaults for new accounts
+  ansible.builtin.lineinfile:
+    path: /etc/login.defs
+    regexp: '^#?\s*{{ item.key }}\s*'
+    line: '{{ item.key }} = {{ item.value }}'
   loop:
     - { key: "PASS_MAX_DAYS", value: "90" }
     - { key: "PASS_MIN_DAYS", value: "1" }
@@ -28,13 +28,13 @@
     line: 'INACTIVE=30'
 
 - name: Enable pam_faillock through authselect
-  ansible.builtin.command:
-    register: faillock_feature
-    changed_when: "'already' not in faillock_Feature.stdout"
-    failed_when: false
+  ansible.builtin.command: authselect enable-feature with-faillock
+  register: authselect_feature
+  changed_when: "'already' not in authselect_feature.stdout"
+  failed_when: false
 
 - name: Configure faillock thresholds
-  ansible.builltin.lineinfile:
+  ansible.builtin.lineinfile:
     path: /etc/security/faillock.conf
     regexp: '^#?\s*{{ item.key }}\s*'
     line: '{{ item.key }} = {{ item.value }}'

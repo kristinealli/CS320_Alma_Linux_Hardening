@@ -6,7 +6,7 @@ hardening_required_ports:
   - 9090/tcp
 hardening_is_web_server: false
 hardening_firewall_zone: public
-hardening_disable_password_auth: false
+hardening_disable_password_auth: true
 hardening_ssh_allow_users: "{{ hardening_ssh_user }}"
 hardening_lock_attempts: 5
 hardening_unlock_seconds: 900
