@@ -1,19 +1,30 @@
 ---
-- name: Apply all available security updates
+- name: Refresh DNF package metadata
+  ansible.builtin.dnf:
+    update_cache: yes
+
+- name: Install  available security updates
   ansible.builtin.dnf:
     name: "*"
     state: latest
     security: true
+    update_only: true
 
 - name: Install dnf-automatic
   ansible.builtin.dnf:
     name: dnf-automatic
     state: present
 
-- name: Configure dnf-automatic to apply updates
+- name: Limit automatic updates to security fixes
   ansible.builtin.lineinfile:
     path: /etc/dnf/automatic.conf
-    regexp: '^apply_updates ='
+    regexp: '^#?\s*upgrade_type\s*='
+    line: 'upgrade_type = security'
+
+- name: Enable automatic installation of updates
+  ansible.builtin.lineinfile:
+    path: /etc/dnf/automatic.conf
+    regexp: '^#?\s*apply_updates\s*='
     line: 'apply_updates = yes'
 
 - name: Enable and start dnf-automatic timer
@@ -21,3 +32,8 @@
     name: dnf-automatic.timer
     enabled: true
     state: started
+
+- name: Confirm host is still on AlmaLinux 10
+  ansible.builtin.assert:
+    that: ansible_facts['distribution_major_version'] == "10"
+    fail_msg: "Unexpected major release; stopping."

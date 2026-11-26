@@ -1,0 +1,44 @@
+---
+- name: Set password quality requirements
+  ansible.builtin.lineinfile:
+    path: /etc/security/pwquality.conf
+    regexp: '^#?\s*{{ item.key }}\s*'
+    line: '{{ item.key }} = {{ item.value }}'
+  loop:
+    - { key: "minlen", value: "14" }
+    - { key: "dcredit", value: "-1" }
+    - { key: "ucredit", value: "-1" }
+    - { key: "lcredit", value: "-1" }
+    - { key: "ocredit", value: "-1" }
+
+  - name: Set password aging defaults for new accounts
+    ansible.builtin.lineinfile:
+      path: /etc/login.defs
+      regexp: '^#?\s*{{ item.key }}\s*'
+      line: '{{ item.key }} = {{ item.value }}'
+  loop:
+    - { key: "PASS_MAX_DAYS", value: "90" }
+    - { key: "PASS_MIN_DAYS", value: "1" }
+    - { key: "PASS_WARN_AGE", value: "7" }
+
+- name: Set inactive-account lock default
+  ansible.builtin.lineinfile:
+    path: /etc/default/useradd
+    regexp: '^#?\s*INACTIVE\s*='
+    line: 'INACTIVE=30'
+
+- name: Enable pam_faillock through authselect
+  ansible.builtin.command:
+    register: faillock_feature
+    changed_when: "'already' not in faillock_Feature.stdout"
+    failed_when: false
+
+- name: Configure faillock thresholds
+  ansible.builltin.lineinfile:
+    path: /etc/security/faillock.conf
+    regexp: '^#?\s*{{ item.key }}\s*'
+    line: '{{ item.key }} = {{ item.value }}'
+  loop:
+    - { key: "deny", value: "{{ hardening_lock_attempts }}" }
+    - { key: "fail_interval", value: "{{ hardening_unlock_seconds }}" }
+    - { key: "unlock_time", value: "{{ hardening_unlock_seconds }}" }
