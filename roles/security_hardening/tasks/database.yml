@@ -1,0 +1,13 @@
+---
+- name: Bind MariaDB to localhost only
+  ansible.builtin.copy: 
+    dest: /etc/my.cnf.d/mariadb-server.cnf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [mysqld]
+      bind-address = 127.0.0.1
+      skip-name-resolve
+  notify: Restart mariadb
+  when: hardening_is_web_server | bool
