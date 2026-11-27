@@ -1,0 +1,35 @@
+---
+- name: Configure SELinux enforcing mode and targeted policy
+  ansible.posix.selinux:
+    policy: targeted
+    state: enforcing
+    update_kernel_param: true
+  register: hardening_selinux_result
+
+- name: Require a reboot before continuing if SELinux changes need one
+  ansible.builtin.assert:
+    that: not hardening_selinux_result.reboot_required
+    fail_msg: "SELinux configuration was updated, but a reboot is required. Reboot the test host, verify applications, then rerun the playbook."
+
+- name: Read the active SELinux mode
+  ansible.builtin.command:
+    argv:
+      - getenforce
+  register: hardening_selinux_mode
+  changed_when: false
+
+- name: Read SELinux policy and persistent configuration
+  ansible.builtin.command:
+    argv:
+      - sestatus
+  register: hardening_selinux_status
+  changed_when: false
+
+- name: Assert SELinux is enforcing with the targeted policy
+  ansible.builtin.assert:
+    that:
+      - hardening_selinux_mode.stdout == "Enforcing"
+      - "'Loaded policy name: targeted' in hardening_selinux_status.stdout"
+      - "'Mode from config file: enforcing' in hardening_selinux_status.stdout"
+      - "'Policy from config file: targeted' in hardening_selinux_status.stdout"
+    fail_msg: "SELinux must be active in enforcing mode with the targeted policy, both now and after reboot."
