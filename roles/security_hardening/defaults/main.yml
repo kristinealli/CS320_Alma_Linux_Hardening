@@ -1,12 +1,14 @@
 ---
 hardening_ssh_user: kjohnson
 hardening_mgmt_network: 10.2.37.0/24
+hardening_required_services: []
 hardening_required_ports: []
-hardening_is_web_server: false
+hardening_is_web_server: true
 hardening_firewall_zone: public
 hardening_firewall_interface: ens18
-hardening_remove_services: [cockpit, dhcpv6-client]
+hardening_is_router: false
 hardening_disable_password_auth: true
 hardening_ssh_allow_users: "{{ hardening_ssh_user }}"
 hardening_lock_attempts: 5
 hardening_unlock_seconds: 900
+hardening_faillock_exempt_group: hardening-automation

@@ -1,6 +1,57 @@
 ---
+- name: Verify AlmaLinux 10 before enforcing account-file permissions
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution == "AlmaLinux"
+      - ansible_facts.distribution_major_version == "10"
+    fail_msg: "Account-file permissions are verified for AlmaLinux 10 only."
+
+- name: Read local account records
+  ansible.builtin.getent:
+    database: passwd
+    service: files
+
+- name: Confirm the SSH administrator exists locally
+  ansible.builtin.assert:
+    that: hardening_ssh_user in ansible_facts.getent_passwd
+    fail_msg: "SSH administrator {{ hardening_ssh_user }} was not found in the local passwd database."
+
 - name: Set ownership and mode on core account files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/passwd, mode: "0644" }
+    - { path: /etc/group, mode: "0644" }
+    - { path: /etc/shadow, mode: "0000" }
+    - { path: /etc/gshadow, mode: "0000" }
+    - { path: /etc/ssh/sshd_config, mode: "0600" }
+
 - name: Secure the admin user's .ssh directory
+  ansible.builtin.file:
+    path: "{{ ansible_facts.getent_passwd[hardening_ssh_user][4] }}/.ssh"
+    state: directory
+    owner: "{{ hardening_ssh_user }}"
+    group: "{{ hardening_ssh_user }}"
+    mode: "0700"
+
 - name: Secure the admin user's authorized_keys file
-- name: Read the passwd database
+  ansible.builtin.file:
+    path: "{{ ansible_facts.getent_passwd[hardening_ssh_user][4] }}/.ssh/authorized_keys"
+    owner: "{{ hardening_ssh_user }}"
+    group: "{{ hardening_ssh_user }}"
+    mode: "0600"
+
 - name: Restrict non-system home directories
+  ansible.builtin.file:
+    path: "{{ item.value[4] }}"
+    mode: "0700"
+  loop: "{{ ansible_facts.getent_passwd | dict2items }}"
+  when:
+    - item.value[1] | int >= 1000
+    - item.value[1] | int < 60000
+    - item.value[4] is match("^/")
+    - item.value[4] != "/"
+    - item.value[5] not in ["/sbin/nologin", "/usr/sbin/nologin", "/bin/false"]

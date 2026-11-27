@@ -1,0 +1,95 @@
+---
+- name: Install auditd
+  ansible.builtin.dnf:
+    name:
+      - audit
+      - audit-rules
+    state: present
+
+- name: Enable and start auditd
+  ansible.builtin.systemd:
+    name: auditd
+    enabled: true
+    state: started
+
+- name: Enable audit logging for pam_faillock failures
+  ansible.builtin.lineinfile:
+    path: /etc/security/faillock.conf
+    regexp: '^#?\s*audit\s*$'
+    line: audit
+
+- name: Ensure the persistent audit rules directory exists
+  ansible.builtin.file:
+    path: /etc/audit/rules.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install persistent hardening audit rules
+  ansible.builtin.template:
+    src: hardening.rules.j2
+    dest: /etc/audit/rules.d/99-hardening.rules
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Load persistent audit rules
+  ansible.builtin.command:
+    argv:
+      - augenrules
+      - --load
+  changed_when: false
+
+- name: Verify failed-login auditing is enabled
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -qE
+      - '^\s*audit\s*$'
+      - /etc/security/faillock.conf
+  register: hardening_faillock_audit_check
+  changed_when: false
+  failed_when: false
+
+- name: Assert pam_faillock audits failed logins
+  ansible.builtin.assert:
+    that: hardening_faillock_audit_check.rc == 0
+    fail_msg: "pam_faillock must have its audit option enabled."
+
+- name: Verify the audit subsystem is enabled
+  ansible.builtin.command:
+    argv:
+      - auditctl
+      - -s
+  register: hardening_audit_status
+  changed_when: false
+
+- name: Assert kernel auditing is enabled
+  ansible.builtin.assert:
+    that: "'enabled 1' in hardening_audit_status.stdout or 'enabled 2' in hardening_audit_status.stdout"
+    fail_msg: "The audit subsystem is not enabled in the running kernel."
+
+- name: Read loaded audit rules
+  ansible.builtin.command:
+    argv:
+      - auditctl
+      - -l
+  register: hardening_loaded_audit_rules
+  changed_when: false
+
+- name: Assert required audit rules are loaded
+  ansible.builtin.assert:
+    that:
+      - "'/etc/passwd' in hardening_loaded_audit_rules.stdout"
+      - "'/etc/shadow' in hardening_loaded_audit_rules.stdout"
+      - "'/etc/group' in hardening_loaded_audit_rules.stdout"
+      - "'/etc/gshadow' in hardening_loaded_audit_rules.stdout"
+      - "'/etc/sudoers' in hardening_loaded_audit_rules.stdout"
+      - "'/etc/sudoers.d' in hardening_loaded_audit_rules.stdout"
+      - "'/etc/ssh/sshd_config' in hardening_loaded_audit_rules.stdout"
+      - "'time-change' in hardening_loaded_audit_rules.stdout"
+      - "'network-change' in hardening_loaded_audit_rules.stdout"
+      - "'privileged-commands' in hardening_loaded_audit_rules.stdout"
+      - "'/etc/selinux/config' in hardening_loaded_audit_rules.stdout"
+    fail_msg: "One or more required audit rules or failed-login auditing settings are missing."

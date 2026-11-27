@@ -25,11 +25,22 @@
   register: hardening_selinux_status
   changed_when: false
 
+- name: Read persistent SELinux settings
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -E
+      - '^(SELINUX|SELINUXTYPE)='
+      - /etc/selinux/config
+  register: hardening_selinux_config
+  changed_when: false
+
 - name: Assert SELinux is enforcing with the targeted policy
   ansible.builtin.assert:
     that:
       - hardening_selinux_mode.stdout == "Enforcing"
-      - "'Loaded policy name: targeted' in hardening_selinux_status.stdout"
-      - "'Mode from config file: enforcing' in hardening_selinux_status.stdout"
-      - "'Policy from config file: targeted' in hardening_selinux_status.stdout"
+      - "hardening_selinux_status.stdout | regex_search('(?m)^Loaded policy name: *targeted *$') is not none"
+      - "hardening_selinux_status.stdout | regex_search('(?m)^Mode from config file: *enforcing *$') is not none"
+      - "'SELINUX=enforcing' in hardening_selinux_config.stdout"
+      - "'SELINUXTYPE=targeted' in hardening_selinux_config.stdout"
     fail_msg: "SELinux must be active in enforcing mode with the targeted policy, both now and after reboot."

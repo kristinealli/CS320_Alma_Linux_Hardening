@@ -1,4 +1,3 @@
----
 - name: Install firewalld
   ansible.builtin.dnf:
     name: firewalld
@@ -10,40 +9,38 @@
     enabled: true
     state: started
 
-- name: Place the interface in the intended zone
+- name: Calculate the allowed firewall services
+  ansible.builtin.set_fact:
+    hardening_firewall_allowed_services: >-
+      {{ (hardening_required_services + (['http', 'https'] if hardening_is_web_server else [])) | unique | list }}
+
+- name: Validate firewall allowlist inputs
+  ansible.builtin.assert:
+    that:
+      - "'ssh' not in hardening_firewall_allowed_services"
+      - "hardening_is_web_server or 'http' not in hardening_required_services"
+      - "hardening_is_web_server or 'https' not in hardening_required_services"
+      - "'22/tcp' not in hardening_required_ports"
+    fail_msg: "Keep SSH out of unrestricted firewall services and ports; allow it only through the management-network rule."
+
+- name: Allow SSH from the management network
   ansible.posix.firewalld:
     zone: "{{ hardening_firewall_zone }}"
-    interface: "{{ hardening_firewall_interface }}"
+    rich_rule: 'rule family="ipv4" source address="{{ hardening_mgmt_network }}" service name="ssh" accept'
     permanent: true
     immediate: true
     state: enabled
 
-- name: Allow SSH only from the management network
-  ansible.posix.firewalld:
-    zone: "{{ hardening_firewall_zone }}"
-    rich_rule: "rule family='ipv4' source address='{{ hardening_mgmt_network }}' service name='ssh' accept"
-    permanent: true
-    immediate: true
-    state: enabled
-
-- name: Remove the general SSH service from the zone
-  ansible.posix.firewalld:
-    zone: "{{ hardening_firewall_zone }}"
-    service: ssh
-    permanent: true
-    immediate: true
-    state: disabled
-
-- name: Remove unneeded services
+- name: Allow required application services
   ansible.posix.firewalld:
     zone: "{{ hardening_firewall_zone }}"
     service: "{{ item }}"
     permanent: true
     immediate: true
-    state: disabled
-  loop: "{{ hardening_remove_services }}"
+    state: enabled
+  loop: "{{ hardening_firewall_allowed_services }}"
 
-- name: Open required application ports
+- name: Allow required application ports
   ansible.posix.firewalld:
     zone: "{{ hardening_firewall_zone }}"
     port: "{{ item }}"
@@ -52,11 +49,174 @@
     state: enabled
   loop: "{{ hardening_required_ports }}"
 
-- name: Allow HTTP and HTTPS only on web servers
+- name: Place the interface in the intended zone
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    interface: "{{ hardening_firewall_interface }}"
+    permanent: true
+    immediate: true
+    state: enabled
+
+- name: Set the zone to drop unapproved inbound traffic
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    target: DROP
+    permanent: true
+    state: present
+  register: hardening_firewall_target
+
+- name: Apply the permanent zone target to the running firewall
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --reload
+  when: hardening_firewall_target.changed
+  changed_when: false
+
+- name: Read runtime services in the firewall zone
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - "--zone={{ hardening_firewall_zone }}"
+      - --list-services
+  register: hardening_runtime_services
+  changed_when: false
+
+- name: Read permanent services in the firewall zone
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --permanent
+      - "--zone={{ hardening_firewall_zone }}"
+      - --list-services
+  register: hardening_permanent_services
+  changed_when: false
+
+- name: Read runtime ports in the firewall zone
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - "--zone={{ hardening_firewall_zone }}"
+      - --list-ports
+  register: hardening_runtime_ports
+  changed_when: false
+
+- name: Read permanent ports in the firewall zone
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --permanent
+      - "--zone={{ hardening_firewall_zone }}"
+      - --list-ports
+  register: hardening_permanent_ports
+  changed_when: false
+
+- name: Read runtime protocols in the firewall zone
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - "--zone={{ hardening_firewall_zone }}"
+      - --list-protocols
+  register: hardening_runtime_protocols
+  changed_when: false
+
+- name: Read permanent protocols in the firewall zone
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --permanent
+      - "--zone={{ hardening_firewall_zone }}"
+      - --list-protocols
+  register: hardening_permanent_protocols
+  changed_when: false
+
+- name: Read runtime rich rules in the firewall zone
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - "--zone={{ hardening_firewall_zone }}"
+      - --list-rich-rules
+  register: hardening_runtime_rich_rules
+  changed_when: false
+
+- name: Read permanent rich rules in the firewall zone
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --permanent
+      - "--zone={{ hardening_firewall_zone }}"
+      - --list-rich-rules
+  register: hardening_permanent_rich_rules
+  changed_when: false
+
+- name: Read runtime source assignments in the firewall zone
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - "--zone={{ hardening_firewall_zone }}"
+      - --list-sources
+  register: hardening_runtime_sources
+  changed_when: false
+
+- name: Read permanent source assignments in the firewall zone
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --permanent
+      - "--zone={{ hardening_firewall_zone }}"
+      - --list-sources
+  register: hardening_permanent_sources
+  changed_when: false
+
+- name: Collect current firewall-zone configuration
+  ansible.builtin.set_fact:
+    hardening_firewall_existing_services: "{{ (hardening_runtime_services.stdout.split() + hardening_permanent_services.stdout.split()) | unique | list }}"
+    hardening_firewall_existing_ports: "{{ (hardening_runtime_ports.stdout.split() + hardening_permanent_ports.stdout.split()) | unique | list }}"
+    hardening_firewall_existing_protocols: "{{ (hardening_runtime_protocols.stdout.split() + hardening_permanent_protocols.stdout.split()) | unique | list }}"
+    hardening_firewall_existing_rich_rules: "{{ (hardening_runtime_rich_rules.stdout_lines + hardening_permanent_rich_rules.stdout_lines) | unique | list }}"
+    hardening_firewall_existing_sources: "{{ (hardening_runtime_sources.stdout.split() + hardening_permanent_sources.stdout.split()) | unique | list }}"
+
+- name: Remove unapproved firewall services
   ansible.posix.firewalld:
     zone: "{{ hardening_firewall_zone }}"
     service: "{{ item }}"
     permanent: true
     immediate: true
-    state: "{{ 'enabled' if hardening_is_web_server else 'disabled' }}"
-  loop: [http, https]
+    state: disabled
+  loop: "{{ hardening_firewall_existing_services | difference(hardening_firewall_allowed_services) }}"
+
+- name: Remove unapproved firewall ports
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: disabled
+  loop: "{{ hardening_firewall_existing_ports | difference(hardening_required_ports) }}"
+
+- name: Remove unapproved firewall protocols
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    protocol: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: disabled
+  loop: "{{ hardening_firewall_existing_protocols }}"
+
+- name: Remove unapproved firewall rich rules
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    rich_rule: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: disabled
+  loop: "{{ hardening_firewall_existing_rich_rules | difference(['rule family=\"ipv4\" source address=\"' ~ hardening_mgmt_network ~ '\" service name=\"ssh\" accept']) }}"
+
+- name: Remove source-based zone assignments
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    source: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: disabled
+  loop: "{{ hardening_firewall_existing_sources }}"

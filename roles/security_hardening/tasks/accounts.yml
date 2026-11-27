@@ -27,11 +27,147 @@
     regexp: '^#?\s*INACTIVE\s*='
     line: 'INACTIVE=30'
 
-- name: Enable pam_faillock through authselect
-  ansible.builtin.command: authselect enable-feature with-faillock
-  register: authselect_feature
-  changed_when: "'already' not in authselect_feature.stdout"
+- name: Read local account records
+  ansible.builtin.getent:
+    database: passwd
+    service: files
+
+- name: Define accounts used for automation
+  ansible.builtin.set_fact:
+    hardening_automation_users: "{{ [hardening_ssh_user, ansible_user | default(hardening_ssh_user)] | unique | list }}"
+
+- name: Confirm automation accounts exist
+  ansible.builtin.assert:
+    that: item in ansible_facts.getent_passwd
+    fail_msg: "Automation account {{ item }} was not found; refusing to alter account security."
+  loop: "{{ hardening_automation_users }}"
+
+- name: Apply password aging to existing interactive users
+  ansible.builtin.user:
+    name: "{{ item.key }}"
+    password_expire_max: 90
+    password_expire_min: 1
+    password_expire_warn: 7
+  loop: "{{ ansible_facts.getent_passwd | dict2items }}"
+  when:
+    - item.value[1] | int >= 1000
+    - item.value[1] | int < 60000
+    - item.value[4] is match('^/home/')
+    - item.key not in hardening_automation_users
+
+- name: Read inactivity values for existing non-automation users
+  ansible.builtin.command:
+    argv:
+      - getent
+      - -s
+      - files
+      - shadow
+      - "{{ item.key }}"
+  loop: "{{ ansible_facts.getent_passwd | dict2items }}"
+  when:
+    - item.value[1] | int >= 1000
+    - item.value[1] | int < 60000
+    - item.value[4] is match('^/home/')
+    - item.key not in hardening_automation_users
+  register: hardening_user_shadow_records
+  changed_when: false
+  no_log: true
+
+- name: Set the inactive period for existing non-automation users
+  ansible.builtin.command:
+    argv:
+      - chage
+      - --inactive
+      - "30"
+      - "{{ item.item.key }}"
+  loop: "{{ hardening_user_shadow_records.results }}"
+  when:
+    - item.rc is defined
+    - item.stdout.split(':') | length > 6
+    - item.stdout.split(':')[6] != "30"
+  changed_when: true
+
+- name: Create a dedicated faillock exemption group
+  ansible.builtin.group:
+    name: "{{ hardening_faillock_exempt_group }}"
+    state: present
+
+- name: Exempt automation accounts from faillock lockout
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: "{{ hardening_faillock_exempt_group }}"
+    append: true
+  loop: "{{ hardening_automation_users }}"
+
+- name: Read the current authselect profile
+  ansible.builtin.command: authselect current --raw
+  register: authselect_current
+  changed_when: false
+
+- name: Enable faillock through the active authselect profile
+  ansible.builtin.command:
+    argv:
+      - authselect
+      - enable-feature
+      - "{{ item }}"
+  loop:
+    - with-faillock
+  when: item not in authselect_current.stdout
+  register: authselect_feature_changes
+
+- name: Apply authselect profile changes
+  ansible.builtin.command:
+    argv:
+      - authselect
+      - apply-changes
+  changed_when: false
+  when: authselect_feature_changes is changed
+
+- name: Verify authselect-managed PAM files
+  ansible.builtin.command:
+    argv:
+      - authselect
+      - check
+  changed_when: false
+
+- name: Read the active authselect features
+  ansible.builtin.command:
+    argv:
+      - authselect
+      - current
+      - --raw
+  register: authselect_final
+  changed_when: false
+
+- name: Assert the required PAM features are enabled
+  ansible.builtin.assert:
+    that: "'with-faillock' in authselect_final.stdout"
+    fail_msg: "authselect must enable with-faillock."
+
+- name: Verify pam_pwquality is active in both PAM stacks
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -qE
+      - '^[[:space:]]*password[[:space:]].*pam_pwquality\.so'
+      - "{{ item }}"
+  loop:
+    - /etc/pam.d/system-auth
+    - /etc/pam.d/password-auth
+  register: pam_pwquality_checks
+  changed_when: false
   failed_when: false
+
+- name: Assert password quality is enforced by PAM
+  ansible.builtin.assert:
+    that: pam_pwquality_checks.results | selectattr('rc', 'ne', 0) | list | length == 0
+    fail_msg: "pam_pwquality is not active in both system-auth and password-auth."
+
+- name: Configure the faillock exemption group
+  ansible.builtin.lineinfile:
+    path: /etc/security/faillock.conf
+    regexp: '^#?\s*admin_group\s*='
+    line: "admin_group = {{ hardening_faillock_exempt_group }}"
 
 - name: Configure faillock thresholds
   ansible.builtin.lineinfile:
@@ -42,3 +178,9 @@
     - { key: "deny", value: "{{ hardening_lock_attempts }}" }
     - { key: "fail_interval", value: "{{ hardening_unlock_seconds }}" }
     - { key: "unlock_time", value: "{{ hardening_unlock_seconds }}" }
+
+- name: Ensure root-equivalent faillock behavior is not enabled
+  ansible.builtin.lineinfile:
+    path: /etc/security/faillock.conf
+    regexp: '^\s*even_deny_root\s*(?:#.*)?$'
+    state: absent

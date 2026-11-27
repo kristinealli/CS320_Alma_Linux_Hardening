@@ -1,7 +1,17 @@
 ---
+- name: Read local account records for SSH path lookup
+  ansible.builtin.getent:
+    database: passwd
+    service: files
+
+- name: Confirm the SSH administrator exists locally
+  ansible.builtin.assert:
+    that: hardening_ssh_user in ansible_facts.getent_passwd
+    fail_msg: "SSH administrator {{ hardening_ssh_user }} was not found in the local passwd database."
+
 - name: Confirm the admin user has an authorized key
   ansible.builtin.stat:
-    path: "/home/{{ hardening_ssh_user }}/.ssh/authorized_keys"
+    path: "{{ ansible_facts.getent_passwd[hardening_ssh_user][4] }}/.ssh/authorized_keys"
   register: admin_keys
 
 - name: Stop if there is no key to fall back on
