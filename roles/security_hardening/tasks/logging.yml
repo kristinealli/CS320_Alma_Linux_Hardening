@@ -1,0 +1,210 @@
+---
+- name: Install system logging and rotation packages
+  ansible.builtin.dnf:
+    name:
+      - rsyslog
+      - logrotate
+    state: present
+
+- name: Enable and start rsyslog
+  ansible.builtin.systemd:
+    name: rsyslog
+    enabled: true
+    state: started
+
+- name: Enable and start the logrotate timer
+  ansible.builtin.systemd:
+    name: logrotate.timer
+    enabled: true
+    state: started
+
+- name: Remove obsolete duplicate syslog rotation configuration
+  ansible.builtin.file:
+    path: /etc/logrotate.d/security-hardening-syslog
+    state: absent
+
+- name: Ensure persistent journal storage exists
+  ansible.builtin.file:
+    path: /var/log/journal
+    state: directory
+    owner: root
+    group: systemd-journal
+    mode: "2755"
+
+- name: Ensure the journald configuration directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure persistent journal storage has the correct SELinux context
+  ansible.builtin.command:
+    argv:
+      - restorecon
+      - -RF
+      - /var/log/journal
+  changed_when: false
+
+- name: Configure persistent journald storage and limits
+  ansible.builtin.template:
+    src: journald.conf.j2
+    dest: /etc/systemd/journald.conf.d/60-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: hardening_journald_config
+
+- name: Restart journald when its configuration changes
+  ansible.builtin.systemd:
+    name: systemd-journald
+    state: restarted
+  when: hardening_journald_config.changed
+
+- name: Flush runtime journal entries to persistent storage
+  ansible.builtin.command:
+    argv:
+      - journalctl
+      - --flush
+  changed_when: false
+
+- name: Enable logging of denied unicast traffic by firewalld
+  ansible.builtin.lineinfile:
+    path: /etc/firewalld/firewalld.conf
+    regexp: '^\s*#?\s*LogDenied='
+    line: LogDenied=unicast
+  register: hardening_firewalld_logging
+
+- name: Apply firewalld logging configuration
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --reload
+  when: hardening_firewalld_logging.changed
+  changed_when: false
+
+- name: Validate the rsyslog configuration
+  ansible.builtin.command:
+    argv:
+      - rsyslogd
+      - -N1
+  changed_when: false
+
+- name: Verify authentication and system logs are routed to persistent files
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -R
+      - -qE
+      - "{{ item.pattern }}"
+      - /etc/rsyslog.conf
+      - /etc/rsyslog.d
+  loop:
+    - name: authentication
+      pattern: '^[[:space:]]*authpriv\.\*[[:space:]]+(/var/log/secure([[:space:]]|$)|action\(type="omfile"[[:space:]]+file="/var/log/secure"\))'
+    - name: system
+      pattern: '^[[:space:]]*\*\.info;mail\.none;authpriv\.none;cron\.none[[:space:]]+(/var/log/messages([[:space:]]|$)|action\(type="omfile"[[:space:]]+file="/var/log/messages"\))'
+  register: hardening_rsyslog_routes
+  changed_when: false
+  failed_when: false
+
+- name: Assert authentication and system log routes exist
+  ansible.builtin.assert:
+    that: item.rc == 0
+    fail_msg: "rsyslog must route {{ item.item.name }} events to its standard log file."
+  loop: "{{ hardening_rsyslog_routes.results }}"
+
+- name: Verify system and authentication logs have logrotate rules
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -qE
+      - "{{ item.pattern }}"
+      - /etc/logrotate.d/rsyslog
+  loop:
+    - name: system
+      pattern: '^[[:space:]]*/var/log/messages([[:space:]]|$)'
+    - name: authentication
+      pattern: '^[[:space:]]*/var/log/secure([[:space:]]|$)'
+  register: hardening_syslog_rotation
+  changed_when: false
+  failed_when: false
+
+- name: Assert system and authentication logs are rotated
+  ansible.builtin.assert:
+    that: item.rc == 0
+    fail_msg: "logrotate must include the {{ item.item.name }} log file."
+  loop: "{{ hardening_syslog_rotation.results }}"
+
+- name: Validate logrotate configuration
+  ansible.builtin.command:
+    argv:
+      - logrotate
+      - --debug
+      - /etc/logrotate.conf
+  changed_when: false
+
+- name: Read effective SSH logging settings
+  ansible.builtin.command:
+    argv:
+      - sshd
+      - -T
+  register: hardening_sshd_logging
+  changed_when: false
+
+- name: Verify SSH authentication events use the protected auth log
+  ansible.builtin.assert:
+    that:
+      - "'syslogfacility authpriv' in (hardening_sshd_logging.stdout | lower)"
+      - "'loglevel verbose' in (hardening_sshd_logging.stdout | lower)"
+    fail_msg: "sshd must log detailed authentication activity to AUTHPRIV."
+
+- name: Verify firewalld logs denied unicast traffic
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --get-log-denied
+  register: hardening_firewalld_log_denied
+  changed_when: false
+
+- name: Assert firewalld denied-traffic logging is active
+  ansible.builtin.assert:
+    that: hardening_firewalld_log_denied.stdout == "unicast"
+    fail_msg: "firewalld must log denied unicast traffic."
+
+- name: Verify audit log rotation settings
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -qE
+      - "{{ item }}"
+      - /etc/audit/auditd.conf
+  loop:
+    - '^[[:space:]]*log_file[[:space:]]*=[[:space:]]*/var/log/audit/audit\.log[[:space:]]*$'
+    - '^[[:space:]]*max_log_file[[:space:]]*=[[:space:]]*50[[:space:]]*$'
+    - '^[[:space:]]*num_logs[[:space:]]*=[[:space:]]*10[[:space:]]*$'
+    - '^[[:space:]]*max_log_file_action[[:space:]]*=[[:space:]]*ROTATE[[:space:]]*$'
+  register: hardening_audit_rotation_checks
+  changed_when: false
+  failed_when: false
+
+- name: Assert audit events are stored and rotated
+  ansible.builtin.assert:
+    that: item.rc == 0
+    fail_msg: "auditd must write to /var/log/audit/audit.log and rotate bounded log files."
+  loop: "{{ hardening_audit_rotation_checks.results }}"
+
+- name: Verify the persistent journal directory exists
+  ansible.builtin.stat:
+    path: /var/log/journal
+  register: hardening_journal_directory
+
+- name: Assert journald stores bounded logs persistently
+  ansible.builtin.assert:
+    that:
+      - hardening_journal_directory.stat.isdir
+      - hardening_journal_directory.stat.pw_name == "root"
+      - hardening_journal_directory.stat.gr_name == "systemd-journal"
+      - hardening_journal_directory.stat.mode == "2755"
+    fail_msg: "The persistent journal directory is missing or has incorrect ownership or permissions."

@@ -6,11 +6,32 @@
       - audit-rules
     state: present
 
+- name: Configure bounded audit log rotation
+  ansible.builtin.lineinfile:
+    path: /etc/audit/auditd.conf
+    regexp: '^\s*#?\s*{{ item.key }}\s*='
+    line: "{{ item.key }} = {{ item.value }}"
+  loop:
+    - { key: log_file, value: /var/log/audit/audit.log }
+    - { key: max_log_file, value: "50" }
+    - { key: num_logs, value: "10" }
+    - { key: max_log_file_action, value: ROTATE }
+  register: hardening_audit_log_rotation
+
 - name: Enable and start auditd
   ansible.builtin.systemd:
     name: auditd
     enabled: true
     state: started
+
+- name: Reload auditd configuration when rotation settings change
+  ansible.builtin.command:
+    argv:
+      - auditctl
+      - --signal
+      - reload
+  when: hardening_audit_log_rotation.changed
+  changed_when: false
 
 - name: Enable audit logging for pam_faillock failures
   ansible.builtin.lineinfile:
@@ -33,12 +54,14 @@
     owner: root
     group: root
     mode: "0640"
+  register: hardening_audit_rules
 
 - name: Load persistent audit rules
   ansible.builtin.command:
     argv:
       - augenrules
       - --load
+  when: hardening_audit_rules.changed
   changed_when: false
 
 - name: Verify failed-login auditing is enabled
